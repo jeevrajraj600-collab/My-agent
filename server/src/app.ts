@@ -45,7 +45,7 @@ export function createApp() {
       callback(null, !origin || allowedCorsOrigins.has(origin));
     },
   }));
-  app.use(express.json({ limit: '1mb' }));
+  app.use(express.json({ limit: '20mb' }));
 
   // API routes
   app.use('/api/keys', keysRouter);

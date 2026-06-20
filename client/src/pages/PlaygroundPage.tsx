@@ -60,12 +60,33 @@ export default function PlaygroundPage() {
       const reader = new FileReader()
       reader.onload = (ev) => {
         const dataUrl = ev.target?.result as string
-        setPendingImages(prev => [...prev, dataUrl])
+        // Resize large images before sending to avoid 413 errors
+        compressImage(dataUrl, (compressed) => {
+          setPendingImages(prev => [...prev, compressed])
+        })
       }
       reader.readAsDataURL(file)
     })
-    // Reset file input so same file can be selected again
     e.target.value = ''
+  }
+
+  // Compress image to max 1024px and 0.8 quality to keep payload small
+  const compressImage = (dataUrl: string, callback: (result: string) => void) => {
+    const img = new Image()
+    img.onload = () => {
+      const MAX = 1024
+      let { width, height } = img
+      if (width > MAX || height > MAX) {
+        if (width > height) { height = Math.round(height * MAX / width); width = MAX }
+        else { width = Math.round(width * MAX / height); height = MAX }
+      }
+      const canvas = document.createElement('canvas')
+      canvas.width = width
+      canvas.height = height
+      canvas.getContext('2d')?.drawImage(img, 0, 0, width, height)
+      callback(canvas.toDataURL('image/jpeg', 0.8))
+    }
+    img.src = dataUrl
   }
 
   const removeImage = (idx: number) => {
@@ -181,7 +202,9 @@ export default function PlaygroundPage() {
       const reader = new FileReader()
       reader.onload = (ev) => {
         const dataUrl = ev.target?.result as string
-        setPendingImages(prev => [...prev, dataUrl])
+        compressImage(dataUrl, (compressed) => {
+          setPendingImages(prev => [...prev, compressed])
+        })
       }
       reader.readAsDataURL(file)
     })
