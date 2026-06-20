@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { initEncryptionKey } from '../lib/crypto.js';
+import { initEncryptionKey, encrypt } from '../lib/crypto.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.resolve(__dirname, '../../data/freeapi.db');
@@ -51,6 +51,7 @@ export function initDb(dbPath?: string): Database.Database {
   migrateModelsV14(db);
   migrateModelsV15Vision(db);
   ensureUnifiedKey(db);
+  seedKeysFromEnv(db);
 
   console.log(`Database initialized at ${resolvedPath}`);
   return db;
@@ -1297,4 +1298,80 @@ export function regenerateUnifiedKey(): string {
   const key = `freellmapi-${crypto.randomBytes(24).toString('hex')}`;
   db.prepare("UPDATE settings SET value = ? WHERE key = 'unified_api_key'").run(key);
   return key;
+}
+
+/**
+ * Seed API keys from environment variables on every startup.
+ * This allows Railway (and other ephemeral environments) to survive redeploys
+ * without losing keys — just set the env vars once and they're always restored.
+ *
+ * Supported env vars:
+ *   PROVIDER_GOOGLE        — Google AI Studio key
+ *   PROVIDER_GROQ          — Groq key
+ *   PROVIDER_CEREBRAS      — Cerebras key
+ *   PROVIDER_SAMBANOVA     — SambaNova key
+ *   PROVIDER_MISTRAL       — Mistral key
+ *   PROVIDER_OPENROUTER    — OpenRouter key
+ *   PROVIDER_GITHUB        — GitHub Models token
+ *   PROVIDER_CLOUDFLARE    — Cloudflare API token (requires PROVIDER_CLOUDFLARE_ACCOUNT too)
+ *   PROVIDER_CLOUDFLARE_ACCOUNT — Cloudflare account ID
+ *   PROVIDER_COHERE        — Cohere key
+ *   PROVIDER_ZHIPU         — Zhipu key
+ *
+ * For providers that need two values (Cloudflare: token + account ID),
+ * the format is "token|accountId" stored in PROVIDER_CLOUDFLARE.
+ */
+function seedKeysFromEnv(db: Database.Database) {
+  const simpleProviders: Array<[string, string]> = [
+    ['google',      process.env.PROVIDER_GOOGLE      ?? ''],
+    ['groq',        process.env.PROVIDER_GROQ        ?? ''],
+    ['cerebras',    process.env.PROVIDER_CEREBRAS    ?? ''],
+    ['sambanova',   process.env.PROVIDER_SAMBANOVA   ?? ''],
+    ['mistral',     process.env.PROVIDER_MISTRAL     ?? ''],
+    ['openrouter',  process.env.PROVIDER_OPENROUTER  ?? ''],
+    ['github',      process.env.PROVIDER_GITHUB      ?? ''],
+    ['cohere',      process.env.PROVIDER_COHERE      ?? ''],
+    ['zhipu',       process.env.PROVIDER_ZHIPU       ?? ''],
+  ];
+
+  const upsertKey = db.prepare(`
+    INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled)
+    VALUES (?, ?, ?, ?, ?, 'healthy', 1)
+    ON CONFLICT DO NOTHING
+  `);
+
+  // Use a unique label per env-seeded key so we can detect duplicates
+  const ENV_LABEL = 'env-seeded';
+
+  const apply = db.transaction(() => {
+    for (const [platform, rawKey] of simpleProviders) {
+      if (!rawKey) continue;
+      // Skip if this platform already has an env-seeded key
+      const existing = db.prepare(
+        `SELECT id FROM api_keys WHERE platform = ? AND label = ?`
+      ).get(platform, ENV_LABEL);
+      if (existing) continue;
+
+      const { encrypted, iv, authTag } = encrypt(rawKey);
+      upsertKey.run(platform, ENV_LABEL, encrypted, iv, authTag);
+      console.log(`[Env Seed] Added key for ${platform}`);
+    }
+
+    // Cloudflare: token|accountId format
+    const cfToken = process.env.PROVIDER_CLOUDFLARE ?? '';
+    const cfAccount = process.env.PROVIDER_CLOUDFLARE_ACCOUNT ?? '';
+    if (cfToken && cfAccount) {
+      const existing = db.prepare(
+        `SELECT id FROM api_keys WHERE platform = ? AND label = ?`
+      ).get('cloudflare', ENV_LABEL);
+      if (!existing) {
+        const combined = `${cfToken}|${cfAccount}`;
+        const { encrypted, iv, authTag } = encrypt(combined);
+        upsertKey.run('cloudflare', ENV_LABEL, encrypted, iv, authTag);
+        console.log(`[Env Seed] Added key for cloudflare`);
+      }
+    }
+  });
+
+  apply();
 }
