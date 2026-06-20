@@ -50,6 +50,7 @@ export function initDb(dbPath?: string): Database.Database {
   migrateModelsV13(db);
   migrateModelsV14(db);
   migrateModelsV15Vision(db);
+  migrateModelsV16Zai(db);
   ensureUnifiedKey(db);
   seedKeysFromEnv(db);
 
@@ -1301,6 +1302,38 @@ export function regenerateUnifiedKey(): string {
 }
 
 /**
+ * V16: Add Z.ai (api.z.ai) as a separate platform from Zhipu CN.
+ * Z.ai is the international endpoint for GLM models.
+ */
+function migrateModelsV16Zai(db: Database.Database) {
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO models (platform, model_id, display_name, intelligence_rank, speed_rank, size_label, rpm_limit, rpd_limit, tpm_limit, tpd_limit, monthly_token_budget, context_window)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const zaiModels: Array<[string, string, string, number, number, string, number | null, number | null, number | null, number | null, string, number | null]> = [
+    ['zai', 'glm-4.5',       'GLM-4.5 (Z.ai)',       5, 4, 'Large',  null, null, null, 1000000, '~30M', 131072],
+    ['zai', 'glm-4.5-air',   'GLM-4.5 Air (Z.ai)',   7, 4, 'Medium', null, null, null, 1000000, '~30M', 131072],
+    ['zai', 'glm-4.7-flash', 'GLM-4.7 Flash (Z.ai)', 8, 3, 'Medium', null, null, null, 1000000, '~30M', 131072],
+  ];
+
+  const apply = db.transaction(() => {
+    for (const m of zaiModels) insert.run(...m);
+    const missing = db.prepare(`
+      SELECT m.id FROM models m
+      LEFT JOIN fallback_config f ON m.id = f.model_db_id
+      WHERE f.id IS NULL ORDER BY m.intelligence_rank ASC
+    `).all() as { id: number }[];
+    if (missing.length > 0) {
+      const maxPriority = (db.prepare('SELECT COALESCE(MAX(priority), 0) AS mx FROM fallback_config').get() as { mx: number }).mx;
+      const addFb = db.prepare('INSERT INTO fallback_config (model_db_id, priority, enabled) VALUES (?, ?, 1)');
+      for (let i = 0; i < missing.length; i++) addFb.run(missing[i].id, maxPriority + i + 1);
+    }
+  });
+  apply();
+}
+
+/**
  * Seed API keys from environment variables on every startup.
  * This allows Railway (and other ephemeral environments) to survive redeploys
  * without losing keys — just set the env vars once and they're always restored.
@@ -1332,6 +1365,7 @@ function seedKeysFromEnv(db: Database.Database) {
     ['github',      process.env.PROVIDER_GITHUB      ?? ''],
     ['cohere',      process.env.PROVIDER_COHERE      ?? ''],
     ['zhipu',       process.env.PROVIDER_ZHIPU       ?? ''],
+    ['zai',         process.env.PROVIDER_ZAI         ?? ''],
   ];
 
   const upsertKey = db.prepare(`

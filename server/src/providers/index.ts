@@ -82,6 +82,14 @@ register(new OpenAICompatProvider({
   baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
 }));
 
+// Z.ai — international endpoint for GLM models (api.z.ai), separate from
+// the CN bigmodel.cn endpoint. Keys from https://api.z.ai are used here.
+register(new OpenAICompatProvider({
+  platform: 'zai',
+  name: 'Z.ai',
+  baseUrl: 'https://api.z.ai/api/paas/v4',
+}));
+
 // Hugging Face Inference Providers router — re-added in V13. The V4 removal
 // reason ("tool-call format issues") was the legacy serverless route that
 // emitted tool calls as text; the new router.huggingface.co meta-router
