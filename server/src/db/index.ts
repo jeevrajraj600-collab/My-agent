@@ -1234,6 +1234,19 @@ function migrateModelsV14(db: Database.Database) {
 }
 
 function ensureUnifiedKey(db: Database.Database) {
+  // If a key is set via env var, always use that — it survives redeploys
+  const envKey = process.env.UNIFIED_API_KEY;
+  if (envKey && envKey.startsWith('freellmapi-')) {
+    const existing = db.prepare("SELECT value FROM settings WHERE key = 'unified_api_key'").get() as { value: string } | undefined;
+    if (!existing) {
+      db.prepare("INSERT INTO settings (key, value) VALUES ('unified_api_key', ?)").run(envKey);
+    } else if (existing.value !== envKey) {
+      db.prepare("UPDATE settings SET value = ? WHERE key = 'unified_api_key'").run(envKey);
+    }
+    return;
+  }
+
+  // Otherwise generate once and persist in DB
   const existing = db.prepare("SELECT value FROM settings WHERE key = 'unified_api_key'").get() as { value: string } | undefined;
   if (!existing) {
     const key = `freellmapi-${crypto.randomBytes(24).toString('hex')}`;
