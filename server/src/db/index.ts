@@ -49,6 +49,7 @@ export function initDb(dbPath?: string): Database.Database {
   migrateModelsV12(db);
   migrateModelsV13(db);
   migrateModelsV14(db);
+  migrateModelsV15Vision(db);
   ensureUnifiedKey(db);
 
   console.log(`Database initialized at ${resolvedPath}`);
@@ -1237,6 +1238,52 @@ function ensureUnifiedKey(db: Database.Database) {
     db.prepare("INSERT INTO settings (key, value) VALUES ('unified_api_key', ?)").run(key);
     console.log(`\n  Your unified API key: ${key}\n`);
   }
+}
+
+/**
+ * V15: Add supports_vision column and mark vision-capable models.
+ * Vision-capable models can process image_url content blocks.
+ * - Google Gemini (all): native multimodal
+ * - GitHub Models (GPT-4o, GPT-4.1): OpenAI vision pass-through
+ * - OpenRouter models that support vision (GPT-4o, GPT-4.1, Gemini)
+ */
+function migrateModelsV15Vision(db: Database.Database) {
+  // Add column if it doesn't exist (idempotent)
+  const cols = db.prepare("PRAGMA table_info(models)").all() as { name: string }[];
+  if (!cols.some(c => c.name === 'supports_vision')) {
+    db.exec(`ALTER TABLE models ADD COLUMN supports_vision INTEGER NOT NULL DEFAULT 0`);
+  }
+
+  // Mark vision-capable models
+  const visionModels: Array<[string, string]> = [
+    // Google Gemini — all models support vision natively
+    ['google', 'gemini-2.5-pro'],
+    ['google', 'gemini-2.5-flash'],
+    ['google', 'gemini-2.5-flash-lite'],
+    ['google', 'gemini-3.0-flash'],
+    ['google', 'gemini-3.1-flash'],
+    ['google', 'gemini-3.1-pro'],
+    // GitHub Models — OpenAI vision pass-through
+    ['github', 'gpt-4o'],
+    ['github', 'openai/gpt-4o'],
+    ['github', 'openai/gpt-4.1'],
+    // OpenRouter vision-capable free models
+    ['openrouter', 'google/gemini-2.5-flash:free'],
+    ['openrouter', 'google/gemini-2.5-pro:free'],
+    ['openrouter', 'openai/gpt-4o:free'],
+  ];
+
+  const setVision = db.prepare(`UPDATE models SET supports_vision = 1 WHERE platform = ? AND model_id = ?`);
+  // Also mark all google platform models as vision-capable
+  const setAllGoogle = db.prepare(`UPDATE models SET supports_vision = 1 WHERE platform = 'google'`);
+
+  const apply = db.transaction(() => {
+    setAllGoogle.run();
+    for (const [platform, modelId] of visionModels) {
+      setVision.run(platform, modelId);
+    }
+  });
+  apply();
 }
 
 export function getUnifiedApiKey(): string {

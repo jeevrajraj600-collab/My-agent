@@ -6,7 +6,7 @@ import type { ChatMessage } from '@freellmapi/shared/types.js';
 import { routeRequest, recordRateLimitHit, recordSuccess, type RouteResult } from '../services/router.js';
 import { recordRequest, recordTokens, setCooldown } from '../services/ratelimit.js';
 import { getDb, getUnifiedApiKey } from '../db/index.js';
-import { contentToString } from '../lib/content.js';
+import { contentToString, hasImageContent } from '../lib/content.js';
 
 export const proxyRouter = Router();
 
@@ -322,6 +322,9 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
     preferredModel = getStickyModel(messages);
   }
 
+  // Detect if request contains images — route only to vision-capable models
+  const requireVision = hasImageContent(messages);
+
   // Retry loop: on 429/rate limit, skip that model+key and try the next one
   const skipKeys = new Set<string>();
   let lastError: any = null;
@@ -329,7 +332,7 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     let route: RouteResult;
     try {
-      route = routeRequest(estimatedTotal, skipKeys.size > 0 ? skipKeys : undefined, preferredModel);
+      route = routeRequest(estimatedTotal, skipKeys.size > 0 ? skipKeys : undefined, preferredModel, requireVision);
     } catch (err: any) {
       // No more models available
       if (lastError) {

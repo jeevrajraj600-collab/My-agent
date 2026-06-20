@@ -130,8 +130,9 @@ export function getAllPenalties(): Array<{ modelDbId: number; count: number; pen
  * @param estimatedTokens - estimated total tokens for rate limit check
  * @param skipKeys - set of "platform:modelId:keyId" to skip (failed on this request)
  * @param preferredModelDbId - try this model first (sticky session)
+ * @param requireVision - if true, only route to models with supports_vision = 1
  */
-export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, preferredModelDbId?: number): RouteResult {
+export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, preferredModelDbId?: number, requireVision = false): RouteResult {
   const db = getDb();
 
   // Get fallback chain ordered by priority
@@ -162,6 +163,9 @@ export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, pre
     // Get model details
     const model = db.prepare('SELECT * FROM models WHERE id = ? AND enabled = 1').get(entry.model_db_id) as ModelRow | undefined;
     if (!model) continue;
+
+    // Skip non-vision models when request contains images
+    if (requireVision && !(model as any).supports_vision) continue;
 
     // Check if we have a provider for this platform
     const provider = getProvider(model.platform as any);

@@ -8,13 +8,21 @@ import type {
   TokenUsage,
 } from '@freellmapi/shared/types.js';
 import { BaseProvider, type CompletionOptions } from './base.js';
-import { contentToString } from '../lib/content.js';
+import { contentToString, extractImageBlocks } from '../lib/content.js';
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
 interface GeminiPart {
   text?: string;
   thoughtSignature?: string;
+  inlineData?: {
+    mimeType: string;
+    data: string; // base64
+  };
+  fileData?: {
+    mimeType: string;
+    fileUri: string;
+  };
   functionCall?: {
     id?: string;
     name?: string;
@@ -129,9 +137,46 @@ function toGeminiToolConfig(toolChoice?: ChatToolChoice): { functionCallingConfi
   };
 }
 
-// Translate OpenAI messages to Gemini format. Content may arrive as a string,
-// null, or the OpenAI multimodal array envelope — flatten to string first so
-// system/user/tool messages all surface as `parts: [{ text }]` for Gemini.
+// Convert an OpenAI image_url block to a Gemini part.
+// data: URIs are decoded to inlineData; http(s): URLs become fileData.
+function imageUrlToGeminiPart(url: string): GeminiPart {
+  if (url.startsWith('data:')) {
+    // data:<mimeType>;base64,<data>
+    const comma = url.indexOf(',');
+    const meta = url.slice(5, comma); // e.g. "image/jpeg;base64"
+    const mimeType = meta.split(';')[0] ?? 'image/jpeg';
+    const data = url.slice(comma + 1);
+    return { inlineData: { mimeType, data } };
+  }
+  // For http/https URLs, Gemini supports fileUri directly
+  const ext = url.split('?')[0].split('.').pop()?.toLowerCase() ?? '';
+  const mimeMap: Record<string, string> = {
+    jpg: 'image/jpeg', jpeg: 'image/jpeg',
+    png: 'image/png', gif: 'image/gif',
+    webp: 'image/webp', bmp: 'image/bmp',
+  };
+  const mimeType = mimeMap[ext] ?? 'image/jpeg';
+  return { fileData: { mimeType, fileUri: url } };
+}
+
+// Build Gemini parts from an OpenAI user message content (string or array).
+function toGeminiUserParts(content: unknown): GeminiPart[] {
+  if (typeof content === 'string') return [{ text: content }];
+  if (!Array.isArray(content)) return [];
+
+  const parts: GeminiPart[] = [];
+  for (const block of content) {
+    if (block?.type === 'text') {
+      if (block.text) parts.push({ text: block.text });
+    } else if (block?.type === 'image_url') {
+      const url: string = block.image_url?.url ?? '';
+      if (url) parts.push(imageUrlToGeminiPart(url));
+    }
+  }
+  return parts.length > 0 ? parts : [{ text: '' }];
+}
+
+// Translate OpenAI messages to Gemini format. Supports text and image_url content.
 function toGeminiContents(messages: ChatMessage[]) {
   const systemMessages = messages
     .filter(m => m.role === 'system')
@@ -195,7 +240,7 @@ function toGeminiContents(messages: ChatMessage[]) {
 
       return {
         role: 'user',
-        parts: [{ text: contentToString(m.content) }],
+        parts: toGeminiUserParts(m.content),
       };
     })
     .filter((entry): entry is { role: 'user' | 'model'; parts: GeminiPart[] } => entry !== null);
