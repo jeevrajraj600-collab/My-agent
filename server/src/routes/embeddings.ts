@@ -41,8 +41,33 @@ async function embedGoogle(
   inputs: string[],
   dimensions?: number,
 ): Promise<number[][]> {
+  // Use embedContent for single, batchEmbedContents for multiple
+  if (inputs.length === 1) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:embedContent?key=${apiKey}`;
+    const body: Record<string, unknown> = {
+      model: `models/${modelId}`,
+      content: { parts: [{ text: inputs[0] }] },
+    };
+    if (dimensions) body.outputDimensionality = dimensions;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`Google Embeddings error ${res.status}: ${(err as any).error?.message ?? res.statusText}`);
+    }
+
+    const data = await res.json() as { embedding: { values: number[] } };
+    return [data.embedding.values];
+  }
+
+  // Batch endpoint
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:batchEmbedContents?key=${apiKey}`;
-  const body = {
+  const body: Record<string, unknown> = {
     requests: inputs.map(text => ({
       model: `models/${modelId}`,
       content: { parts: [{ text }] },
