@@ -24,16 +24,16 @@ const embeddingSchema = z.object({
 
 // Embedding model catalog — platform -> model_id -> display
 const EMBEDDING_MODELS: Record<string, { platform: string; modelId: string; dimensions: number }> = {
-  // Google
-  'text-embedding-004':          { platform: 'google',  modelId: 'text-embedding-004',          dimensions: 768 },
-  'text-multilingual-embedding-002': { platform: 'google', modelId: 'text-multilingual-embedding-002', dimensions: 768 },
+  // Google — gemini-embedding-001 is the current GA model (replaces text-embedding-004)
+  'gemini-embedding-001':        { platform: 'google',  modelId: 'gemini-embedding-001',        dimensions: 3072 },
+  'text-embedding-004':          { platform: 'google',  modelId: 'gemini-embedding-001',        dimensions: 3072 }, // alias
   // Mistral
   'mistral-embed':               { platform: 'mistral', modelId: 'mistral-embed',               dimensions: 1024 },
   // Auto — try Google first, fall back to Mistral
-  'auto':                        { platform: 'google',  modelId: 'text-embedding-004',          dimensions: 768 },
+  'auto':                        { platform: 'google',  modelId: 'gemini-embedding-001',        dimensions: 3072 },
 };
 
-const DEFAULT_EMBED_MODEL = 'text-embedding-004';
+const DEFAULT_EMBED_MODEL = 'gemini-embedding-001';
 
 async function embedGoogle(
   apiKey: string,
@@ -41,12 +41,12 @@ async function embedGoogle(
   inputs: string[],
   dimensions?: number,
 ): Promise<number[][]> {
-  // Use embedContent for single, batchEmbedContents for multiple
-  if (inputs.length === 1) {
+  const results: number[][] = [];
+
+  for (const text of inputs) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:embedContent?key=${apiKey}`;
     const body: Record<string, unknown> = {
-      model: `models/${modelId}`,
-      content: { parts: [{ text: inputs[0] }] },
+      content: { parts: [{ text }] },
     };
     if (dimensions) body.outputDimensionality = dimensions;
 
@@ -62,32 +62,10 @@ async function embedGoogle(
     }
 
     const data = await res.json() as { embedding: { values: number[] } };
-    return [data.embedding.values];
+    results.push(data.embedding.values);
   }
 
-  // Batch endpoint
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:batchEmbedContents?key=${apiKey}`;
-  const body: Record<string, unknown> = {
-    requests: inputs.map(text => ({
-      model: `models/${modelId}`,
-      content: { parts: [{ text }] },
-      ...(dimensions ? { outputDimensionality: dimensions } : {}),
-    })),
-  };
-
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`Google Embeddings error ${res.status}: ${(err as any).error?.message ?? res.statusText}`);
-  }
-
-  const data = await res.json() as { embeddings: Array<{ values: number[] }> };
-  return data.embeddings.map(e => e.values);
+  return results;
 }
 
 async function embedMistral(
