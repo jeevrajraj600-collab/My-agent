@@ -20,6 +20,9 @@ export class OpenAICompatProvider extends BaseProvider {
   /** Per-provider HTTP timeout override. Cloud APIs finish in ~15s; locally-hosted
    * inference (llama.cpp / vLLM on CPU) can take 30-120s for long prompts. Default 15000. */
   private readonly timeoutMs: number;
+  /** Hard cap on max_tokens sent to this provider. Prevents 400 errors from providers
+   * with lower limits (e.g. Groq caps at 32768). */
+  private readonly maxTokens?: number;
 
   constructor(opts: {
     platform: Platform;
@@ -28,6 +31,7 @@ export class OpenAICompatProvider extends BaseProvider {
     extraHeaders?: Record<string, string>;
     validateUrl?: string;
     timeoutMs?: number;
+    maxTokens?: number;
   }) {
     super();
     this.platform = opts.platform;
@@ -36,6 +40,7 @@ export class OpenAICompatProvider extends BaseProvider {
     this.extraHeaders = opts.extraHeaders ?? {};
     this.validateUrl = opts.validateUrl;
     this.timeoutMs = opts.timeoutMs ?? 15000;
+    this.maxTokens = opts.maxTokens;
   }
 
   async chatCompletion(
@@ -55,7 +60,9 @@ export class OpenAICompatProvider extends BaseProvider {
         model: modelId,
         messages,
         temperature: options?.temperature,
-        max_tokens: options?.max_tokens,
+        max_tokens: options?.max_tokens && this.maxTokens
+          ? Math.min(options.max_tokens, this.maxTokens)
+          : (options?.max_tokens ?? this.maxTokens),
         top_p: options?.top_p,
         tools: options?.tools,
         tool_choice: options?.tool_choice,
@@ -91,7 +98,9 @@ export class OpenAICompatProvider extends BaseProvider {
         model: modelId,
         messages,
         temperature: options?.temperature,
-        max_tokens: options?.max_tokens,
+        max_tokens: options?.max_tokens && this.maxTokens
+          ? Math.min(options.max_tokens, this.maxTokens)
+          : (options?.max_tokens ?? this.maxTokens),
         top_p: options?.top_p,
         tools: options?.tools,
         tool_choice: options?.tool_choice,

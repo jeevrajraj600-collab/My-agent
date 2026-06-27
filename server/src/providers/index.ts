@@ -19,6 +19,7 @@ register(new OpenAICompatProvider({
   platform: 'groq',
   name: 'Groq',
   baseUrl: 'https://api.groq.com/openai/v1',
+  maxTokens: 32768,
 }));
 
 // Cerebras - OpenAI-compatible
